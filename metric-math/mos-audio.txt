@@ -1,0 +1,74 @@
+MOS-Audio — CloudWatch Metric Math
+==================================
+
+Add these metrics to a CloudWatch graph for your MediaLive channel.
+Period: 60 seconds. Statistic as shown. Set each metric's Id as listed.
+
+  Id  Metric                      Statistic   Namespace
+  --  --------------------------  ----------  ------------
+  m1  RtpPacketsLost              Sum         AWS/MediaLive
+  m2  RtpPacketsReceived          Sum         AWS/MediaLive
+  m5  OutputAudioLevelDbfs        Minimum     AWS/MediaLive
+  m6  OutputAudioLevelDbfs        Maximum     AWS/MediaLive
+  m7  OutputAudioLevelLkfs        Average     AWS/MediaLive
+  m9  FillMsec                    Maximum     AWS/MediaLive
+
+Dimensions: ChannelId, Pipeline (and AudioDescriptionName where applicable).
+
+
+Expressions
+-----------
+Add each as a separate math expression. Display only MOS_A; keep the rest
+hidden until a drop needs decomposing.
+
+  PLR    IF(m1+m2 > 0, m1/(m1+m2)*100, 0)
+  Ie     IF(PLR == 0, 0, (30 * PLR) / (PLR + 10))
+  FP     MIN(m9/60000, 1) * 20
+  ADP    MIN(ABS(m7 - (-23)) / 6, 1) * 10
+  SCP    IF(m5 <= -60, 5, 0) + IF(m6 >= -1, 5, 0)
+  R      MAX(0, MIN(100, 93.2 - Ie - FP - ADP - SCP))
+  MOS_A  MAX(1, MIN(4.5, 1 + 0.035*R + R*(R-60)*(100-R)*7e-6))
+
+
+Single-expression form
+----------------------
+If you would rather not create intermediate expressions, this is the same
+calculation inlined. It is harder to debug, so prefer the stepwise form.
+
+  MAX(1, MIN(4.5,
+    1
+    + 0.035*MAX(0, MIN(100, 93.2
+        - IF(m1+m2 > 0, (30*(m1/(m1+m2)*100))/((m1/(m1+m2)*100)+10), 0)
+        - MIN(m9/60000, 1)*20
+        - MIN(ABS(m7 - (-23))/6, 1)*10
+        - (IF(m5 <= -60, 5, 0) + IF(m6 >= -1, 5, 0))))
+    + MAX(0, MIN(100, 93.2
+        - IF(m1+m2 > 0, (30*(m1/(m1+m2)*100))/((m1/(m1+m2)*100)+10), 0)
+        - MIN(m9/60000, 1)*20
+        - MIN(ABS(m7 - (-23))/6, 1)*10
+        - (IF(m5 <= -60, 5, 0) + IF(m6 >= -1, 5, 0))))
+      * (MAX(0, MIN(100, 93.2
+        - IF(m1+m2 > 0, (30*(m1/(m1+m2)*100))/((m1/(m1+m2)*100)+10), 0)
+        - MIN(m9/60000, 1)*20
+        - MIN(ABS(m7 - (-23))/6, 1)*10
+        - (IF(m5 <= -60, 5, 0) + IF(m6 >= -1, 5, 0)))) - 60)
+      * (100 - MAX(0, MIN(100, 93.2
+        - IF(m1+m2 > 0, (30*(m1/(m1+m2)*100))/((m1/(m1+m2)*100)+10), 0)
+        - MIN(m9/60000, 1)*20
+        - MIN(ABS(m7 - (-23))/6, 1)*10
+        - (IF(m5 <= -60, 5, 0) + IF(m6 >= -1, 5, 0)))))
+      * 7e-6))
+
+
+Notes
+-----
+* Non-RTP inputs (HLS pull, plain UDP) do not publish RtpPackets* metrics.
+  PLR then evaluates to 0. For a loss signal on those inputs, substitute:
+      PLR = m3/60*100        where m3 = ChannelInputErrorSeconds (Sum)
+
+* -23 LKFS is the EBU R 128 program loudness target. If your delivery spec
+  uses a different target (for example -24 LKFS for ATSC A/85), change the
+  -23 in the ADP expression.
+
+* Ie_max = 30 and Bpl = 10 are the published E-Model values for AAC at
+  128 kbps. Leave them unless you have measured values for your codec.

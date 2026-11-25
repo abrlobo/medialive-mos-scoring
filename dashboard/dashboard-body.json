@@ -1,0 +1,131 @@
+{
+  "_comment": [
+    "CloudWatch dashboard body for MediaLive perceptual quality.",
+    "Replace CHANNEL_ID with your MediaLive channel ID and REGION with your",
+    "region, then create the dashboard:",
+    "",
+    "  aws cloudwatch put-dashboard \\",
+    "    --dashboard-name MediaLive-MOS \\",
+    "    --dashboard-body file://dashboard-body.json",
+    "",
+    "Widget 1 shows both scores against the MOS bands. Widget 2 shows the",
+    "MOS-Audio component terms, which stay hidden on widget 1 until a drop",
+    "needs decomposing.",
+    "",
+    "The MOS-Video drop_rate denominator assumes 30 fps. Change m8/(30*60)",
+    "to match your channel's output frame rate."
+  ],
+  "widgets": [
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 0,
+      "width": 24,
+      "height": 9,
+      "properties": {
+        "title": "Perceptual quality - MOS-Audio and MOS-Video",
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "REGION",
+        "period": 60,
+        "stat": "Average",
+        "yAxis": {
+          "left": {
+            "min": 1,
+            "max": 4.5,
+            "label": "MOS",
+            "showUnits": false
+          }
+        },
+        "annotations": {
+          "horizontal": [
+            {
+              "label": "Excellent",
+              "value": 4.3,
+              "fill": "above",
+              "color": "#1d8102"
+            },
+            {
+              "label": "Fair",
+              "value": 3.5,
+              "color": "#f0a93b"
+            },
+            {
+              "label": "Poor",
+              "value": 3.0,
+              "fill": "below",
+              "color": "#d13212"
+            }
+          ]
+        },
+        "metrics": [
+          [{ "expression": "MAX(1, MIN(4.5, 1 + 0.035*r + r*(r-60)*(100-r)*7e-6))", "label": "MOS-Audio", "id": "mos_a", "color": "#e7157b", "region": "REGION" }],
+          [{ "expression": "MAX(0, MIN(100, 93.2 - ie - fp - adp - scp))", "label": "R", "id": "r", "visible": false, "region": "REGION" }],
+          [{ "expression": "IF(plr == 0, 0, (30 * plr) / (plr + 10))", "label": "Ie", "id": "ie", "visible": false, "region": "REGION" }],
+          [{ "expression": "IF(m1+m2 > 0, m1/(m1+m2)*100, 0)", "label": "PLR %", "id": "plr", "visible": false, "region": "REGION" }],
+          [{ "expression": "MIN(m9/60000, 1) * 20", "label": "FP", "id": "fp", "visible": false, "region": "REGION" }],
+          [{ "expression": "MIN(ABS(m7 - (-23)) / 6, 1) * 10", "label": "ADP", "id": "adp", "visible": false, "region": "REGION" }],
+          [{ "expression": "IF(m5 <= -60, 5, 0) + IF(m6 >= -1, 5, 0)", "label": "SCP", "id": "scp", "visible": false, "region": "REGION" }],
+
+          [{ "expression": "MAX(1.0, MIN(4.5, 1.0 + POW(vqi, 0.9) * 3.5))", "label": "MOS-Video", "id": "mos_v", "color": "#0972d3", "region": "REGION" }],
+          [{ "expression": "fds*0.35 + ffs*0.25 + eqs*0.20 + cis*0.15 + mns*0.05", "label": "VQI", "id": "vqi", "visible": false, "region": "REGION" }],
+          [{ "expression": "1 - MIN(1, IF(m8 > 0, m8/(30*60), 0)*0.5 + IF(ISPRESENT(m12), (100-m12)/100, 0)*0.5)", "label": "FDS", "id": "fds", "visible": false, "region": "REGION" }],
+          [{ "expression": "IF(ISPRESENT(m13), m13/100, 1)*0.7 + (1 - MIN(1, m9/30000))*0.3", "label": "FFS", "id": "ffs", "visible": false, "region": "REGION" }],
+          [{ "expression": "(1 - MIN(1, m10/100))*0.5 + IF(ISPRESENT(m14), m14/100, 1)*0.5", "label": "EQS", "id": "eqs", "visible": false, "region": "REGION" }],
+          [{ "expression": "IF(ISPRESENT(m15), m15/100, 1)*0.35 + IF(ISPRESENT(m16), m16/100, 1)*0.35 + IF(ISPRESENT(m17), m17/100, 1)*0.30", "label": "CIS", "id": "cis", "visible": false, "region": "REGION" }],
+          [{ "expression": "IF(ISPRESENT(m11), m11/100, 1)", "label": "MNS", "id": "mns", "visible": false, "region": "REGION" }],
+
+          ["AWS/MediaLive", "RtpPacketsLost", "ChannelId", "CHANNEL_ID", "Pipeline", "0", { "id": "m1", "stat": "Sum", "visible": false }],
+          [".", "RtpPacketsReceived", ".", ".", ".", ".", { "id": "m2", "stat": "Sum", "visible": false }],
+          [".", "OutputAudioLevelDbfs", ".", ".", ".", ".", { "id": "m5", "stat": "Minimum", "visible": false }],
+          [".", "OutputAudioLevelDbfs", ".", ".", ".", ".", { "id": "m6", "stat": "Maximum", "visible": false }],
+          [".", "OutputAudioLevelLkfs", ".", ".", ".", ".", { "id": "m7", "stat": "Average", "visible": false }],
+          [".", "FillMsec", ".", ".", ".", ".", { "id": "m9", "stat": "Maximum", "visible": false }],
+          [".", "DroppedFrames", ".", ".", ".", ".", { "id": "m8", "stat": "Sum", "visible": false }],
+          [".", "SvqTime", ".", ".", ".", ".", { "id": "m10", "stat": "Maximum", "visible": false }],
+          [".", "MinMQCS", ".", ".", ".", ".", { "id": "m11", "stat": "Minimum", "visible": false }],
+          [".", "MqcsVideoFrameDrops", ".", ".", ".", ".", { "id": "m12", "stat": "Minimum", "visible": false }],
+          [".", "MqcsFreezeFrameDetected", ".", ".", ".", ".", { "id": "m13", "stat": "Minimum", "visible": false }],
+          [".", "MqcsSvq", ".", ".", ".", ".", { "id": "m14", "stat": "Minimum", "visible": false }],
+          [".", "MqcsBlackFrameDetected", ".", ".", ".", ".", { "id": "m15", "stat": "Minimum", "visible": false }],
+          [".", "MqcsFillFrameInsertion", ".", ".", ".", ".", { "id": "m16", "stat": "Minimum", "visible": false }],
+          [".", "MqcsContinuityCounterErrors", ".", ".", ".", ".", { "id": "m17", "stat": "Minimum", "visible": false }]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 9,
+      "width": 24,
+      "height": 6,
+      "properties": {
+        "title": "MOS-Audio component terms - R-factor points lost",
+        "view": "timeSeries",
+        "stacked": true,
+        "region": "REGION",
+        "period": 60,
+        "yAxis": {
+          "left": {
+            "min": 0,
+            "max": 60,
+            "label": "penalty points",
+            "showUnits": false
+          }
+        },
+        "metrics": [
+          [{ "expression": "IF(IF(a1+a2 > 0, a1/(a1+a2)*100, 0) == 0, 0, (30 * IF(a1+a2 > 0, a1/(a1+a2)*100, 0)) / (IF(a1+a2 > 0, a1/(a1+a2)*100, 0) + 10))", "label": "Ie - equipment impairment (packet loss)", "id": "e_ie", "color": "#e7157b", "region": "REGION" }],
+          [{ "expression": "MIN(a9/60000, 1) * 20", "label": "FP - fill penalty", "id": "e_fp", "color": "#037f8c", "region": "REGION" }],
+          [{ "expression": "MIN(ABS(a7 - (-23)) / 6, 1) * 10", "label": "ADP - audio deviation (loudness)", "id": "e_adp", "color": "#ff9900", "region": "REGION" }],
+          [{ "expression": "IF(a5 <= -60, 5, 0) + IF(a6 >= -1, 5, 0)", "label": "SCP - silence / clip", "id": "e_scp", "color": "#8a94a0", "region": "REGION" }],
+          ["AWS/MediaLive", "RtpPacketsLost", "ChannelId", "CHANNEL_ID", "Pipeline", "0", { "id": "a1", "stat": "Sum", "visible": false }],
+          [".", "RtpPacketsReceived", ".", ".", ".", ".", { "id": "a2", "stat": "Sum", "visible": false }],
+          [".", "OutputAudioLevelDbfs", ".", ".", ".", ".", { "id": "a5", "stat": "Minimum", "visible": false }],
+          [".", "OutputAudioLevelDbfs", ".", ".", ".", ".", { "id": "a6", "stat": "Maximum", "visible": false }],
+          [".", "OutputAudioLevelLkfs", ".", ".", ".", ".", { "id": "a7", "stat": "Average", "visible": false }],
+          [".", "FillMsec", ".", ".", ".", ".", { "id": "a9", "stat": "Maximum", "visible": false }]
+        ]
+      }
+    }
+  ]
+}

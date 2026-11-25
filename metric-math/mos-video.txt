@@ -1,0 +1,79 @@
+MOS-Video — CloudWatch Metric Math
+==================================
+
+Add these metrics to a CloudWatch graph for your MediaLive channel.
+Period: 60 seconds. Statistic as shown. Set each metric's Id as listed.
+
+  Id   Metric                          Statistic   Requires
+  ---  ------------------------------  ----------  --------------------
+  m8   DroppedFrames                   Sum         —
+  m9   FillMsec                        Maximum     —
+  m10  SvqTime                         Maximum     —
+  m11  MinMQCS                         Minimum     CMAF Ingest output
+  m12  MqcsVideoFrameDrops             Minimum     CMAF Ingest output
+  m13  MqcsFreezeFrameDetected         Minimum     CMAF Ingest output
+  m14  MqcsSvq                         Minimum     CMAF Ingest output
+  m15  MqcsBlackFrameDetected          Minimum     CMAF Ingest output
+  m16  MqcsFillFrameInsertion          Minimum     CMAF Ingest output
+  m17  MqcsContinuityCounterErrors     Minimum     CMAF Ingest output
+
+Dimensions: ChannelId, Pipeline.
+
+The Mqcs* metrics require a CMAF Ingest output group on the channel. The
+ISPRESENT guards below make the expression safe without one.
+
+
+Expressions
+-----------
+Display only MOS_V; keep the components hidden until a drop needs
+decomposing.
+
+  drop_rate    IF(m8 > 0, m8/(30*60), 0)
+  vfd_norm     IF(ISPRESENT(m12), (100-m12)/100, 0)
+  FDS          1 - MIN(1, drop_rate*0.5 + vfd_norm*0.5)
+
+  freeze_norm  IF(ISPRESENT(m13), m13/100, 1)
+  fill_pen     MIN(1, m9/30000)
+  FFS          freeze_norm*0.7 + (1-fill_pen)*0.3
+
+  svq_norm     IF(ISPRESENT(m14), m14/100, 1)
+  EQS          (1 - MIN(1, m10/100))*0.5 + svq_norm*0.5
+
+  black_norm   IF(ISPRESENT(m15), m15/100, 1)
+  fillfr_norm  IF(ISPRESENT(m16), m16/100, 1)
+  cc_norm      IF(ISPRESENT(m17), m17/100, 1)
+  CIS          black_norm*0.35 + fillfr_norm*0.35 + cc_norm*0.30
+
+  MNS          IF(ISPRESENT(m11), m11/100, 1)
+
+  VQI          FDS*0.35 + FFS*0.25 + EQS*0.20 + CIS*0.15 + MNS*0.05
+  MOS_V        MAX(1.0, MIN(4.5, 1.0 + POW(VQI, 0.9) * 3.5))
+
+
+ADJUST BEFORE USE
+-----------------
+The drop_rate expression assumes 30 fps over a 60-second period:
+
+    IF(m8 > 0, m8/(30*60), 0)
+                  ^^
+Change this to your channel's output frame rate. Common values:
+
+    25 fps   ->  m8/(25*60)
+    30 fps   ->  m8/(30*60)      (as written)
+    50 fps   ->  m8/(50*60)
+    60 fps   ->  m8/(60*60)
+
+Leaving it at 30 on a 60 fps channel understates the drop rate by half.
+
+
+Component weights
+-----------------
+  FDS  35%   frame continuity      most noticeable to viewers
+  FFS  25%   freeze events
+  EQS  20%   encoder quality stress
+  CIS  15%   content integrity
+  MNS   5%   MinMQCS cross-check   components already counted individually
+
+These sum to 1.0. They derive from operational experience rather than a
+scored subjective dataset — calibrate against your own QC observations
+before trusting a threshold in production.
