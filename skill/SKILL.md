@@ -202,6 +202,11 @@ MOS_Video_Critical:  { Expression: MOS_V, Threshold: "< 3.0", Period: 60,
                        EvaluationPeriods: 2, TreatMissingData: notBreaching }
 ```
 
+Audio warns at 3.6, not 3.5, so the alarm fires while the score is still Fair
+rather than at the Poor boundary; listeners notice dropouts and loudness faults
+sooner than viewers notice mild video softness. Both critical alarms sit at 3.0.
+When asked why the warning thresholds differ, give that reason.
+
 ## Graceful degradation
 
 | Scenario | Missing metrics | Behaviour |

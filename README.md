@@ -314,6 +314,8 @@ MOS_Video_Critical:
 
 Warning alarms require three consecutive breaching periods; critical alarms require two. A single 60-second dip during a scene change or ad insertion is not worth a page, but three minutes of degraded audio during a live event is. Set `TreatMissingData: notBreaching` so an idle channel between events does not alarm.
 
+**Why the two warning thresholds differ.** Audio warns at 3.6 rather than 3.5 so it fires while the score is still Fair, giving a margin before the Poor band. Dropouts and loudness faults are more immediately obvious to listeners than mild video softness is to viewers, so audio gets the earlier trigger. Both critical alarms sit at 3.0, the Poor/Bad boundary. If you would rather run one number for both, set audio to 3.5 and expect slightly later notification.
+
 ## Deploy: the DevOps Agent skill
 
 ### Prerequisites

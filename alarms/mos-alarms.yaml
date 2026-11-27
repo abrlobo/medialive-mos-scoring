@@ -4,6 +4,10 @@
 # require two. A single 60-second dip during a scene change or ad insertion is
 # not worth a page, but three minutes of degraded audio during a live event is.
 #
+# Audio warns at 3.6 rather than 3.5 (the video warning threshold) so it fires
+# while the score is still Fair, giving a margin before the Poor band. Both
+# critical alarms sit at 3.0, the Poor/Bad boundary.
+#
 # TreatMissingData is notBreaching so an idle channel between events does not
 # alarm.
 #
@@ -26,12 +30,10 @@ Parameters:
   AlarmTopicArn:
     Type: String
     Description: SNS topic ARN for alarm notifications
-  OutputFrameRate:
-    Type: Number
-    Default: 30
-    Description: >
-      Channel output frame rate. Used as the DroppedFrames denominator in
-      MOS-Video. Setting this wrong misreports the frame-continuity component.
+
+# Note: the MOS-Video alarms are not in this template (see the Outputs section).
+# When you add them, they need an OutputFrameRate parameter for the
+# DroppedFrames denominator - see ../metric-math/mos-video.txt.
 
 Resources:
 
