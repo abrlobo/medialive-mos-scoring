@@ -316,24 +316,37 @@ Warning alarms require three consecutive breaching periods; critical alarms requ
 
 **Why the two warning thresholds differ.** Audio warns at 3.6 rather than 3.5 so it fires while the score is still Fair, giving a margin before the Poor band. Dropouts and loudness faults are more immediately obvious to listeners than mild video softness is to viewers, so audio gets the earlier trigger. Both critical alarms sit at 3.0, the Poor/Bad boundary. If you would rather run one number for both, set audio to 3.5 and expect slightly later notification.
 
-### Deploying all four alarms
+### Deploying the alarms
 
-[`alarms/mos-alarms.yaml`](alarms/mos-alarms.yaml) ships all four as CloudFormation:
+Audio and video ship as two independent CloudFormation templates, so you can deploy only what a channel supports:
+
+| Template | Alarms | Deploy it when |
+|---|---|---|
+| [`alarms/mos-audio-alarms.yaml`](alarms/mos-audio-alarms.yaml) | warning < 3.6, critical < 3.0 | always — works on any channel |
+| [`alarms/mos-video-alarms.yaml`](alarms/mos-video-alarms.yaml) | warning < 3.5, critical < 3.0 | the channel carries video |
 
 ```bash
+# audio - no extra parameters
 aws cloudformation deploy \
-  --template-file alarms/mos-alarms.yaml \
-  --stack-name medialive-mos-alarms \
+  --template-file alarms/mos-audio-alarms.yaml \
+  --stack-name medialive-mos-audio-<channel-id>-p0 \
   --parameter-overrides \
-      ChannelId=<channel-id> \
-      Pipeline=0 \
-      AlarmTopicArn=<sns-topic-arn> \
+      ChannelId=<channel-id> Pipeline=0 AlarmTopicArn=<sns-topic-arn>
+
+# video - set OutputFrameRate to match the channel
+aws cloudformation deploy \
+  --template-file alarms/mos-video-alarms.yaml \
+  --stack-name medialive-mos-video-<channel-id>-p0 \
+  --parameter-overrides \
+      ChannelId=<channel-id> Pipeline=0 AlarmTopicArn=<sns-topic-arn> \
       OutputFrameRate=30
 ```
 
+Deploy one stack per pipeline on a redundant channel, changing `Pipeline` and the stack name.
+
 **Set `OutputFrameRate` to match your channel** (25, 30, 50, 60). It is the `DroppedFrames` denominator in MOS-Video, and leaving it at 30 on a 60 fps channel understates the frame-drop rate by half. The stack echoes the value back as an output so you can confirm it.
 
-Deploy one stack per pipeline on a redundant channel, changing `Pipeline` and the stack name.
+Splitting the two means an audio-only channel, or one without a CMAF Ingest output group, does not carry video alarms that can never fire usefully. It also keeps each stack's lifecycle independent: retune the video thresholds without touching a working audio deployment.
 
 > **A CloudWatch limit shapes the video alarms.** A metric-math alarm can reference [at most 10 metrics and 10 expressions](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarm-limits.html), both hard limits. MOS-Video needs all 10 metric slots, so the template inlines the intermediate normalisations and uses 7 expressions instead of the 15 shown above. The arithmetic is identical — `reference/verify.py` checks the condensed form against the model across a grid of inputs, including every MQCS metric absent and frame rates from 25 to 60 fps.
 
@@ -474,7 +487,8 @@ CloudWatch Metric Math expressions are billed per **metric referenced**, not per
 │   ├── mos-audio.txt             paste-ready CloudWatch expressions
 │   └── mos-video.txt
 ├── alarms/
-│   └── mos-alarms.yaml           CloudFormation: all four MOS alarms
+│   ├── mos-audio-alarms.yaml     CloudFormation: MOS-Audio warning + critical
+│   └── mos-video-alarms.yaml     CloudFormation: MOS-Video warning + critical
 ├── dashboard/
 │   └── dashboard-body.json       dashboard: both scores + component terms
 ├── reference/

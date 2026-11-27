@@ -152,7 +152,7 @@ if total != 16:
     fails.append("metric count")
 
 print("\n" + "=" * 68)
-print("Condensed MOS-Video form used in alarms/mos-alarms.yaml")
+print("Condensed MOS-Video form used in alarms/mos-video-alarms.yaml")
 print("=" * 68)
 # A CloudWatch metric-math alarm allows at most 10 metrics and 10 expressions.
 # MOS-Video needs all 10 metric slots, so the CloudFormation template inlines

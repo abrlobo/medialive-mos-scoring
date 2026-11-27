@@ -1,0 +1,291 @@
+# CloudWatch alarms for the MediaLive MOS-Audio perceptual quality score.
+#
+# MOS-Audio follows the ITU-T G.107 E-Model adapted for broadcast AAC: packet
+# loss, fill frames, loudness deviation from the -23 LKFS EBU R 128 target, and
+# silence or clipping each subtract penalty points from a 93.2 base, and the
+# resulting R-factor maps to a 1.0-4.5 MOS value.
+#
+# These alarms work on any MediaLive channel. For non-RTP inputs the packet
+# loss term evaluates to zero - see ../metric-math/mos-audio.txt for the
+# ChannelInputErrorSeconds fallback.
+#
+# Audio warns at 3.6 rather than 3.5 (the video warning threshold) so it fires
+# while the score is still Fair, giving a margin before the Poor band. The
+# critical alarm sits at 3.0, the Poor/Bad boundary.
+#
+# Warning alarms require three consecutive breaching periods; critical alarms
+# require two. A single 60-second dip during a scene change or ad insertion is
+# not worth a page, but three minutes of degradation during a live event is.
+#
+# TreatMissingData is notBreaching so an idle channel between events does not
+# alarm.
+#
+# Deploy one stack per pipeline on a redundant channel, changing Pipeline and
+# the stack name.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  MOS-Audio perceptual quality alarms for an AWS Elemental MediaLive
+  channel, computed with CloudWatch Metric Math over native metrics.
+
+Parameters:
+  ChannelId:
+    Type: String
+    Description: MediaLive channel ID
+  Pipeline:
+    Type: String
+    Default: '0'
+    AllowedValues: ['0', '1']
+    Description: Pipeline to monitor
+  AlarmTopicArn:
+    Type: String
+    Description: SNS topic ARN for alarm notifications
+
+Resources:
+
+  MosAudioWarning:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'MOS_Audio_Warning-${ChannelId}-p${Pipeline}'
+      AlarmDescription: >
+        MediaLive audio MOS below Fair - investigate input health and loudness.
+      ComparisonOperator: LessThanThreshold
+      Threshold: 3.6
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+      OKActions: [!Ref AlarmTopicArn]
+      Metrics:
+        - Id: mos_a
+          Label: MOS-Audio
+          ReturnData: true
+          Expression: >-
+            MAX(1, MIN(4.5, 1 + 0.035*r + r*(r-60)*(100-r)*7e-6))
+        - Id: r
+          Label: R-factor
+          ReturnData: false
+          Expression: 'MAX(0, MIN(100, 93.2 - ie - fp - adp - scp))'
+        - Id: ie
+          Label: Equipment impairment
+          ReturnData: false
+          Expression: 'IF(plr == 0, 0, (30 * plr) / (plr + 10))'
+        - Id: plr
+          Label: Packet loss rate
+          ReturnData: false
+          Expression: 'IF(m1+m2 > 0, m1/(m1+m2)*100, 0)'
+        - Id: fp
+          Label: Fill penalty
+          ReturnData: false
+          Expression: 'MIN(m9/60000, 1) * 20'
+        - Id: adp
+          Label: Audio deviation penalty
+          ReturnData: false
+          Expression: 'MIN(ABS(m7 - (-23)) / 6, 1) * 10'
+        - Id: scp
+          Label: Silence/clip penalty
+          ReturnData: false
+          Expression: 'IF(m5 <= -60, 5, 0) + IF(m6 >= -1, 5, 0)'
+        - Id: m1
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: RtpPacketsLost
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m2
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: RtpPacketsReceived
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m5
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: OutputAudioLevelDbfs
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m6
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: OutputAudioLevelDbfs
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m7
+          ReturnData: false
+          MetricStat:
+            Stat: Average
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: OutputAudioLevelLkfs
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m9
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: FillMsec
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+
+  MosAudioCritical:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'MOS_Audio_Critical-${ChannelId}-p${Pipeline}'
+      AlarmDescription: >
+        MediaLive audio MOS Poor/Bad - listener impact likely, check RTP loss
+        and FillMsec.
+      ComparisonOperator: LessThanThreshold
+      Threshold: 3.0
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+      OKActions: [!Ref AlarmTopicArn]
+      Metrics:
+        - Id: mos_a
+          Label: MOS-Audio
+          ReturnData: true
+          Expression: >-
+            MAX(1, MIN(4.5, 1 + 0.035*r + r*(r-60)*(100-r)*7e-6))
+        - Id: r
+          ReturnData: false
+          Expression: 'MAX(0, MIN(100, 93.2 - ie - fp - adp - scp))'
+        - Id: ie
+          ReturnData: false
+          Expression: 'IF(plr == 0, 0, (30 * plr) / (plr + 10))'
+        - Id: plr
+          ReturnData: false
+          Expression: 'IF(m1+m2 > 0, m1/(m1+m2)*100, 0)'
+        - Id: fp
+          ReturnData: false
+          Expression: 'MIN(m9/60000, 1) * 20'
+        - Id: adp
+          ReturnData: false
+          Expression: 'MIN(ABS(m7 - (-23)) / 6, 1) * 10'
+        - Id: scp
+          ReturnData: false
+          Expression: 'IF(m5 <= -60, 5, 0) + IF(m6 >= -1, 5, 0)'
+        - Id: m1
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: RtpPacketsLost
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m2
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: RtpPacketsReceived
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m5
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: OutputAudioLevelDbfs
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m6
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: OutputAudioLevelDbfs
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m7
+          ReturnData: false
+          MetricStat:
+            Stat: Average
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: OutputAudioLevelLkfs
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m9
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: FillMsec
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+
+Outputs:
+  WarningAlarm:
+    Description: MOS-Audio warning alarm name (fires below 3.6)
+    Value: !Ref MosAudioWarning
+  CriticalAlarm:
+    Description: MOS-Audio critical alarm name (fires below 3.0)
+    Value: !Ref MosAudioCritical
