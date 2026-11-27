@@ -152,6 +152,71 @@ if total != 16:
     fails.append("metric count")
 
 print("\n" + "=" * 68)
+print("Condensed MOS-Video form used in alarms/mos-alarms.yaml")
+print("=" * 68)
+# A CloudWatch metric-math alarm allows at most 10 metrics and 10 expressions.
+# MOS-Video needs all 10 metric slots, so the CloudFormation template inlines
+# the intermediate normalisations into 7 expressions instead of 15. This
+# reimplements that condensed form and checks it against mos_video().
+
+
+def condensed_video(m8, m9, m10, m11, m12, m13, m14, m15, m16, m17, fps=30):
+    drop = (m8 / (fps * 60)) if m8 > 0 else 0.0
+    vfd = ((100 - m12) / 100.0) if m12 is not None else 0.0
+    fds = 1 - min(1.0, drop * 0.5 + vfd * 0.5)
+    freeze = (m13 / 100.0) if m13 is not None else 1.0
+    ffs = freeze * 0.7 + (1 - min(1.0, m9 / 30000.0)) * 0.3
+    svq = (m14 / 100.0) if m14 is not None else 1.0
+    eqs = (1 - min(1.0, m10 / 100.0)) * 0.5 + svq * 0.5
+    black = (m15 / 100.0) if m15 is not None else 1.0
+    fillfr = (m16 / 100.0) if m16 is not None else 1.0
+    cc = (m17 / 100.0) if m17 is not None else 1.0
+    cis = black * 0.35 + fillfr * 0.35 + cc * 0.30
+    mns = (m11 / 100.0) if m11 is not None else 1.0
+    vqi = fds * 0.35 + ffs * 0.25 + eqs * 0.20 + cis * 0.15 + mns * 0.05
+    return max(1.0, min(4.5, 1.0 + pow(vqi, 0.9) * 3.5))
+
+
+video_cases = [
+    ("perfect",            0,     0,  0, 100, 100, 100, 100, 100, 100, 100),
+    ("no MQCS at all",     0,     0,  4, None, None, None, None, None, None,
+     None),
+    ("walkthrough window", 0, 31000,  4,  95, 100,  94,  97, 100,  98, 100),
+    ("heavy drops",      900,     0,  5,  60,  55, 100,  98, 100, 100,  90),
+    ("encoder stressed",   0,     0, 45,  80, 100, 100,  60, 100, 100, 100),
+    ("black frames",       0,     0,  2,  40, 100, 100, 100,  10, 100, 100),
+    ("freeze + fill",      0, 30000,  3,  50, 100,  20,  95, 100, 100, 100),
+    ("everything bad",  1800, 60000, 90,   0,   0,   0,   0,   0,   0,   0),
+]
+for (lbl, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17) in video_cases:
+    ref, _ = mos_video(dropped_frames=m8, fill_msec=m9, svq_time=m10,
+                       fps=30, window_s=60, mqcs_vfd=m12, mqcs_freeze=m13,
+                       mqcs_svq=m14, mqcs_black=m15, mqcs_fill=m16,
+                       mqcs_cc=m17, min_mqcs=m11)
+    got = condensed_video(m8, m9, m10, m11, m12, m13, m14, m15, m16, m17)
+    ok = abs(ref - got) < 1e-9
+    print(f"{'ok  ' if ok else 'FAIL'} {lbl:24s} model={ref:.4f} "
+          f"condensed={got:.4f}")
+    if not ok:
+        fails.append(f"condensed video: {lbl}")
+
+for fps in (25, 30, 50, 60):
+    ref, _ = mos_video(dropped_frames=450, fill_msec=0, svq_time=0, fps=fps,
+                       window_s=60, mqcs_vfd=100, mqcs_freeze=100,
+                       mqcs_svq=100, mqcs_black=100, mqcs_fill=100,
+                       mqcs_cc=100, min_mqcs=100)
+    got = condensed_video(450, 0, 0, 100, 100, 100, 100, 100, 100, 100,
+                          fps=fps)
+    ok = abs(ref - got) < 1e-9
+    print(f"{'ok  ' if ok else 'FAIL'} {fps} fps denominator        "
+          f"model={ref:.4f} condensed={got:.4f}")
+    if not ok:
+        fails.append(f"condensed video fps {fps}")
+
+print("     structure counts: 10 metrics / 7 expressions / 17 total")
+print("     CloudWatch limits: 10 metrics / 10 expressions / 20 total")
+
+print("\n" + "=" * 68)
 if fails:
     print(f"FAILURES ({len(fails)}): {fails}")
     sys.exit(1)

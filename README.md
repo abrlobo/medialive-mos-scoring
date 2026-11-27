@@ -316,6 +316,27 @@ Warning alarms require three consecutive breaching periods; critical alarms requ
 
 **Why the two warning thresholds differ.** Audio warns at 3.6 rather than 3.5 so it fires while the score is still Fair, giving a margin before the Poor band. Dropouts and loudness faults are more immediately obvious to listeners than mild video softness is to viewers, so audio gets the earlier trigger. Both critical alarms sit at 3.0, the Poor/Bad boundary. If you would rather run one number for both, set audio to 3.5 and expect slightly later notification.
 
+### Deploying all four alarms
+
+[`alarms/mos-alarms.yaml`](alarms/mos-alarms.yaml) ships all four as CloudFormation:
+
+```bash
+aws cloudformation deploy \
+  --template-file alarms/mos-alarms.yaml \
+  --stack-name medialive-mos-alarms \
+  --parameter-overrides \
+      ChannelId=<channel-id> \
+      Pipeline=0 \
+      AlarmTopicArn=<sns-topic-arn> \
+      OutputFrameRate=30
+```
+
+**Set `OutputFrameRate` to match your channel** (25, 30, 50, 60). It is the `DroppedFrames` denominator in MOS-Video, and leaving it at 30 on a 60 fps channel understates the frame-drop rate by half. The stack echoes the value back as an output so you can confirm it.
+
+Deploy one stack per pipeline on a redundant channel, changing `Pipeline` and the stack name.
+
+> **A CloudWatch limit shapes the video alarms.** A metric-math alarm can reference [at most 10 metrics and 10 expressions](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarm-limits.html), both hard limits. MOS-Video needs all 10 metric slots, so the template inlines the intermediate normalisations and uses 7 expressions instead of the 15 shown above. The arithmetic is identical — `reference/verify.py` checks the condensed form against the model across a grid of inputs, including every MQCS metric absent and frame rates from 25 to 60 fps.
+
 ## Deploy: the DevOps Agent skill
 
 ### Prerequisites
@@ -453,7 +474,7 @@ CloudWatch Metric Math expressions are billed per **metric referenced**, not per
 │   ├── mos-audio.txt             paste-ready CloudWatch expressions
 │   └── mos-video.txt
 ├── alarms/
-│   └── mos-alarms.yaml           CloudFormation template for the audio alarms
+│   └── mos-alarms.yaml           CloudFormation: all four MOS alarms
 ├── dashboard/
 │   └── dashboard-body.json       dashboard: both scores + component terms
 ├── reference/

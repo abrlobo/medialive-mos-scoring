@@ -11,7 +11,19 @@
 # TreatMissingData is notBreaching so an idle channel between events does not
 # alarm.
 #
-# Replace <CHANNEL_ID>, <PIPELINE>, and <SNS_TOPIC_ARN> before deploying.
+# Set OutputFrameRate to your channel's output frame rate. It is the
+# DroppedFrames denominator in MOS-Video; leaving it at 30 on a 60 fps channel
+# understates the frame-drop rate by half.
+#
+# The MOS-Video alarms reference 10 metrics, which is the hard CloudWatch limit
+# for a metric-math alarm, so the component expressions here are condensed
+# relative to ../metric-math/mos-video.txt (intermediate normalisations are
+# inlined). The arithmetic is identical - see ../reference/verify.py.
+#
+# The Mqcs* metrics require a CMAF Ingest output group delivering to
+# MediaPackage. Without one they report no datapoints, the ISPRESENT guards
+# fall back to best-case, and MOS-Video still scores from DroppedFrames,
+# FillMsec and SvqTime alone. Treat such scores as a floor on impairment.
 
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
@@ -30,10 +42,14 @@ Parameters:
   AlarmTopicArn:
     Type: String
     Description: SNS topic ARN for alarm notifications
-
-# Note: the MOS-Video alarms are not in this template (see the Outputs section).
-# When you add them, they need an OutputFrameRate parameter for the
-# DroppedFrames denominator - see ../metric-math/mos-video.txt.
+  OutputFrameRate:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    Description: >
+      Channel output frame rate, used as the DroppedFrames denominator in
+      MOS-Video. Set this to match your channel (25, 30, 50, 60). Leaving it
+      at 30 on a 60 fps channel understates the frame-drop rate by half.
 
 Resources:
 
@@ -277,18 +293,379 @@ Resources:
                 - Name: Pipeline
                   Value: !Ref Pipeline
 
+  # ---------------------------------------------------------------- video
+  MosVideoWarning:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'MOS_Video_Warning-${ChannelId}-p${Pipeline}'
+      AlarmDescription: >
+        MediaLive video MOS below Fair - check DroppedFrames and SvqTime.
+      ComparisonOperator: LessThanThreshold
+      Threshold: 3.5
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+      OKActions: [!Ref AlarmTopicArn]
+      Metrics:
+        - Id: mos_v
+          Label: MOS-Video
+          ReturnData: true
+          Expression: 'MAX(1.0, MIN(4.5, 1.0 + POW(vqi, 0.9) * 3.5))'
+        - Id: vqi
+          Label: Video quality index
+          ReturnData: false
+          Expression: 'fds*0.35 + ffs*0.25 + eqs*0.20 + cis*0.15 + mns*0.05'
+        - Id: fds
+          Label: Frame drop score
+          ReturnData: false
+          Expression: !Sub
+            - '1 - MIN(1, IF(m8 > 0, m8/(${FPS}*60), 0)*0.5
+              + IF(ISPRESENT(m12), (100-m12)/100, 0)*0.5)'
+            - FPS: !Ref OutputFrameRate
+        - Id: ffs
+          Label: Freeze frame score
+          ReturnData: false
+          Expression: >-
+            IF(ISPRESENT(m13), m13/100, 1)*0.7 + (1 - MIN(1, m9/30000))*0.3
+        - Id: eqs
+          Label: Encoder quality score
+          ReturnData: false
+          Expression: >-
+            (1 - MIN(1, m10/100))*0.5 + IF(ISPRESENT(m14), m14/100, 1)*0.5
+        - Id: cis
+          Label: Content integrity score
+          ReturnData: false
+          Expression: >-
+            IF(ISPRESENT(m15), m15/100, 1)*0.35
+            + IF(ISPRESENT(m16), m16/100, 1)*0.35
+            + IF(ISPRESENT(m17), m17/100, 1)*0.30
+        - Id: mns
+          Label: MQCS normalised score
+          ReturnData: false
+          Expression: 'IF(ISPRESENT(m11), m11/100, 1)'
+        - Id: m8
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: DroppedFrames
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m9
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: FillMsec
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m10
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: SvqTime
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m11
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MinMQCS
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m12
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsVideoFrameDrops
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m13
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsFreezeFrameDetected
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m14
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsSvq
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m15
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsBlackFrameDetected
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m16
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsFillFrameInsertion
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m17
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsContinuityCounterErrors
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+
+  MosVideoCritical:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'MOS_Video_Critical-${ChannelId}-p${Pipeline}'
+      AlarmDescription: >
+        MediaLive video MOS Poor/Bad - viewer impact likely, escalate to
+        input failover.
+      ComparisonOperator: LessThanThreshold
+      Threshold: 3.0
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+      OKActions: [!Ref AlarmTopicArn]
+      Metrics:
+        - Id: mos_v
+          Label: MOS-Video
+          ReturnData: true
+          Expression: 'MAX(1.0, MIN(4.5, 1.0 + POW(vqi, 0.9) * 3.5))'
+        - Id: vqi
+          ReturnData: false
+          Expression: 'fds*0.35 + ffs*0.25 + eqs*0.20 + cis*0.15 + mns*0.05'
+        - Id: fds
+          ReturnData: false
+          Expression: !Sub
+            - '1 - MIN(1, IF(m8 > 0, m8/(${FPS}*60), 0)*0.5
+              + IF(ISPRESENT(m12), (100-m12)/100, 0)*0.5)'
+            - FPS: !Ref OutputFrameRate
+        - Id: ffs
+          ReturnData: false
+          Expression: >-
+            IF(ISPRESENT(m13), m13/100, 1)*0.7 + (1 - MIN(1, m9/30000))*0.3
+        - Id: eqs
+          ReturnData: false
+          Expression: >-
+            (1 - MIN(1, m10/100))*0.5 + IF(ISPRESENT(m14), m14/100, 1)*0.5
+        - Id: cis
+          ReturnData: false
+          Expression: >-
+            IF(ISPRESENT(m15), m15/100, 1)*0.35
+            + IF(ISPRESENT(m16), m16/100, 1)*0.35
+            + IF(ISPRESENT(m17), m17/100, 1)*0.30
+        - Id: mns
+          ReturnData: false
+          Expression: 'IF(ISPRESENT(m11), m11/100, 1)'
+        - Id: m8
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: DroppedFrames
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m9
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: FillMsec
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m10
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: SvqTime
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m11
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MinMQCS
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m12
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsVideoFrameDrops
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m13
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsFreezeFrameDetected
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m14
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsSvq
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m15
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsBlackFrameDetected
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m16
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsFillFrameInsertion
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+        - Id: m17
+          ReturnData: false
+          MetricStat:
+            Stat: Minimum
+            Period: 60
+            Metric:
+              Namespace: AWS/MediaLive
+              MetricName: MqcsContinuityCounterErrors
+              Dimensions:
+                - Name: ChannelId
+                  Value: !Ref ChannelId
+                - Name: Pipeline
+                  Value: !Ref Pipeline
+
 Outputs:
   AudioWarningAlarm:
-    Description: Audio MOS warning alarm name
+    Description: Audio MOS warning alarm name (fires below 3.6)
     Value: !Ref MosAudioWarning
   AudioCriticalAlarm:
-    Description: Audio MOS critical alarm name
+    Description: Audio MOS critical alarm name (fires below 3.0)
     Value: !Ref MosAudioCritical
-  Note:
-    Description: Video alarms
-    Value: >
-      MOS-Video alarms follow the same pattern with the expressions in
-      ../metric-math/mos-video.txt. They are omitted here to keep this
-      template readable; the Mqcs* metrics require a CMAF Ingest output
-      group and ISPRESENT guards, which are easier to author in the console
-      against a live channel.
+  VideoWarningAlarm:
+    Description: Video MOS warning alarm name (fires below 3.5)
+    Value: !Ref MosVideoWarning
+  VideoCriticalAlarm:
+    Description: Video MOS critical alarm name (fires below 3.0)
+    Value: !Ref MosVideoCritical
+  FrameRateInUse:
+    Description: >
+      Frame rate used as the DroppedFrames denominator in MOS-Video. Confirm
+      this matches the channel's output frame rate.
+    Value: !Ref OutputFrameRate
